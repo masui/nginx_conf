@@ -1,0 +1,115 @@
+##
+# Each server block defines a "virtual host" which handles requests sent to a
+# specific domain (see "server_name" directive). Here we define a virtual host 
+# which handles all requests sent to "pico.gyazo.com".
+#
+server {
+    # Domain of this virtual host. Nginx will pass all requests with the 
+    # HTTP header "Host: pico.gyazo.com" to this virtual host.
+    server_name pico.gyazo.com;
+    
+    # The server will listen for normal HTTP traffic on port 80
+    listen 80;
+    listen [::]:80 ipv6only=on;
+       
+    # ...and will listen for HTTPS traffic on port 443
+    listen 443 ssl;
+    ssl_certificate /usr/local/nginx/conf/tls/nginx.crt;
+    ssl_certificate_key /usr/local/nginx/conf/tls/nginx.key;
+
+    # Just specifying the paths to the log files
+    access_log /usr/local/nginx/logs/proxy/access.log;
+    error_log /usr/local/nginx/logs/proxy/error.log;
+
+    ##
+    # Next we have some directives which affect the way that proxied requests
+    # are handled:
+    #
+
+    # Some headers to add to requests which are being forwarded to the proxied
+    # domain.
+    proxy_set_header Host gyazo.com;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # This directive specified a DNS resolver to use when forwarding requests to
+    # the proxied domains. By default, nginx will use some kind of internal DNS
+    # resolver which only knows about domains it is serving, so this directive
+    # can be removed if nginx is also serving the proxied domain. But when
+    # running the proxy on a different machine (e.g. for testing), which must
+    # forward requests to gyazo.com via the Internet, this directive is
+    # required.
+    resolver 8.8.8.8;
+    
+    # This directive changes the values of "Location" and "Request" response
+    # headers, so that to the client, responses appear to come from 
+    # pico.gyazo.com not gyazo.com (the proxied domain).
+    proxy_redirect http://gyazo.com http://pico.gyazo.com; 
+    proxy_redirect https://gyazo.com https://pico.gyazo.com;
+
+    ## 
+    # Now we specify which locations should be proxied:
+
+    ##
+    # Nginx does some kind of matching and for a given request applies the
+    # configuration in the location block with the most specific selector. Here
+    # we specify that by default, all requests to any path on pico.gyazo.com get
+    # forwarded to gyazo.com. The scheme (HTTP or HTTPS) and querystring are 
+    # preserved.
+    #
+    location / {
+    	proxy_pass $scheme://gyazo.com$uri$is_args$args;
+    }
+
+    ##
+    # Here we specify a sort of "exception" to the above rule which says that
+    # requests to pico.gyazo.com/proxy/* are actually to be served straight from
+    # some local directory. This allows us to load scripts and other additional
+    # content from our own filesystem, for example below we add a <script> tag
+    # which loads "/proxy/js/proxylens.js".
+    #
+    location /proxy {
+        # alias /var/www/proxy;
+	alias /usr/local/nginx/html/proxy;
+
+	# This directive means look for requested files using the given path
+	# ($uri) within the local directory specified above and if their not
+        # found return a HTTP 404 Not Found error code.
+    	try_files $uri =404;
+    }
+
+    ##
+    # This is a special rule for proxying the login page specifically. It is the
+    # same as the default ("/") location block above, but includes a
+    # substitution directive to include extra JavaScripts in the login page.
+    #
+    location /login {
+        proxy_pass $scheme://gyazo.com$uri$is_args$args;
+
+	##
+	# These two directives mean "for each response, exactly once, subsitute
+	# </head> with BLAH.". The new content is a series of <script> tags
+	# which load some crypto-js JavaScript modules, a JavaScript module for 
+	# drawing QR codes and a custom JavaScript file (proxylens.js) which
+	# is where all the lens functionality is implemented.
+	#
+	# See: https://code.google.com/p/crypto-js/
+	# See: https://github.com/davidshimjs/qrcodejs
+	#
+	sub_filter_once on;             
+        sub_filter '</head>' '
+<!-- BEGIN PROXY LENS MOD -->
+<script src="https://crypto-js.googlecode.com/svn/tags/3.1.2/build/rollups/aes.js"></script>
+<script src="https://crypto-js.googlecode.com/svn/tags/3.1.2/build/components/lib-typedarrays.js"></script>
+<script src="https://crypto-js.googlecode.com/svn/tags/3.1.2/build/rollups/sha256.js"></script>
+<script src="https://crypto-js.googlecode.com/svn/tags/3.1.2/build/rollups/hmac-sha256.js"></script>
+
+<!-- TODO: load this from another source -->
+<script src="https://raw.githubusercontent.com/davidshimjs/qrcodejs/master/qrcode.min.js"></script>
+
+<script src="/proxy/js/proxylens.js"></script>
+<!-- END PROXY LENS MOD -->
+</head>';
+	# End sub_filter directive
+    }
+}
